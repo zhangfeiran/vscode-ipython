@@ -1,5 +1,4 @@
 let vscode = require('vscode');
-const helpers = require('./helpers');
 
 const pythonTerminalName = 'IPython';
 let pythonTerminal = null;
@@ -11,7 +10,7 @@ function createPythonTerminal() {
     textQueue = [];
     waitsQueue = [];
     pythonTerminal = vscode.window.createTerminal(pythonTerminalName);
-    sendQueuedText('ipython', 1500);
+    sendQueuedText('ipython', 2000, false);
 }
 
 function removePythonTerminal() {
@@ -21,8 +20,16 @@ function removePythonTerminal() {
     waitsQueue = [];
 }
 
-function sendQueuedText(text, waitTime = 50) {
+function sendQueuedText(text, waitTime = 50, deleteToLineStart = false) {
+    if (deleteToLineStart) {
+        textQueue.push('%deleteToLineStart');
+        waitsQueue.push(10);
+    }
+
     textQueue.push(text);
+    waitsQueue.push(10);
+
+    textQueue.push('\n');
     waitsQueue.push(waitTime);
 }
 
@@ -30,7 +37,11 @@ function queueLoop() {
     if (textQueue.length > 0 && pythonTerminal !== null && pythonTerminal._queuedRequests.length === 0) {
         const text = textQueue.shift();
         const waitTime = waitsQueue.shift();
-        pythonTerminal.sendText(text);
+        if (text == '%deleteToLineStart') {
+            vscode.commands.executeCommand('workbench.action.terminal.deleteToLineStart')
+        } else {
+            pythonTerminal.sendText(text, false);
+        }
         setTimeout(queueLoop, waitTime);
     } else {
         setTimeout(queueLoop, 50);
@@ -38,13 +49,24 @@ function queueLoop() {
 }
 
 function updateFilename(filename) {
-    currentFilename = filename;
-    sendQueuedText(`__file__ = r'${filename}'`)
-    sendQueuedText('import sys')
-    sendQueuedText('import os')
-    sendQueuedText('sys.path.append(os.path.dirname(__file__))')
+    currentFilename = filename
+    sendQueuedText(`import os; os.chdir(os.path.dirname(r'${filename}'))`, 200, true)
 }
 
+/* TODO:
+
+auto adjust waiting time
+    work with ipython kernels for the extension to work properly like the jupyter notebooks where it could wait for it to initialise properly, queue up commands while waiting for the previous command to complete etc.
+support multiple selection
+auto insert new line at the bottom
+
+settings:
+    ipython path and params
+    run -i
+    auto expand when multiple lines selected
+    move cursor to terminal
+    add to menu
+*/
 
 function activate(context) {
     vscode.window.onDidCloseTerminal(function (event) {
@@ -55,7 +77,7 @@ function activate(context) {
 
     queueLoop();
 
-    let sendSelectedToIPython = vscode.commands.registerCommand('ipython.sendSelectedToIPython', function () {
+    function sendText(advance = false) {
         if (pythonTerminal === null) {
             createPythonTerminal();
         }
@@ -65,20 +87,34 @@ function activate(context) {
             updateFilename(filename);
         }
 
-        let startLine, endLine;
         if (editor.selection.isEmpty) {
-            startLine = editor.selection.active.line + 1
-            endLine = startLine;
+            var text = editor.document.lineAt(editor.selection.active.line).text;
         } else {
-            startLine = editor.selection.start.line + 1;
-            endLine = editor.selection.end.line + 1;
+            var text = editor.document.getText(editor.selection);
         }
 
-        const command = `%load -r ${startLine}-${endLine} ${filename}`;
-        sendQueuedText(command);
-        sendQueuedText('\n\n');
-        pythonTerminal.show();
+        sendQueuedText(text, 10, true);
+
+        pythonTerminal.show(true);
+
+        if (advance) {
+            line = editor.selection.active.line
+            lineAt = (line == (editor.document.lineCount - 1) ? line : (line + 1))
+            let range = editor.document.lineAt(lineAt).range;
+            editor.selection = new vscode.Selection(range.start, range.start);
+            editor.revealRange(range);
+        }
+    }
+
+    let sendSelectedToIPython = vscode.commands.registerCommand('ipython.sendSelectedToIPython', function () {
+        sendText(false)
     });
+
+    let sendSelectedToIPythonAndAdvance = vscode.commands.registerCommand('ipython.sendSelectedToIPythonAndAdvance', function () {
+        sendText(true)
+    });
+
+
 
     let sendFileContentsToIPython = vscode.commands.registerCommand('ipython.sendFileContentsToIPython', function () {
         if (pythonTerminal === null) {
@@ -91,13 +127,29 @@ function activate(context) {
             updateFilename(filename);
         }
 
-        sendQueuedText(`%load ${filename}`, 100);
-        sendQueuedText('\n\n');
-        pythonTerminal.show();
+        sendQueuedText(`%run ${filename}`, 10, true);
+        pythonTerminal.show(true);
+    });
+
+    let sendWhosToIPython = vscode.commands.registerCommand('ipython.sendWhosToIPython', function () {
+        if (pythonTerminal === null) {
+            return;
+        }
+
+        const editor = vscode.window.activeTextEditor;
+        const filename = editor.document.fileName;
+        if (filename !== currentFilename) {
+            updateFilename(filename);
+        }
+
+        sendQueuedText(`%whos`, 10, true);
+        pythonTerminal.show(true);
     });
 
     context.subscriptions.push(sendSelectedToIPython);
+    context.subscriptions.push(sendSelectedToIPythonAndAdvance);
     context.subscriptions.push(sendFileContentsToIPython);
+    context.subscriptions.push(sendWhosToIPython);
 }
 exports.activate = activate;
 
