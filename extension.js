@@ -5,6 +5,7 @@ const pythonTerminalName = 'IPython';
 let pythonTerminal = null;
 let textQueue = [];
 let waitsQueue = [];
+let currentFilename = null;
 
 function createPythonTerminal() {
     textQueue = [];
@@ -15,11 +16,12 @@ function createPythonTerminal() {
 
 function removePythonTerminal() {
     pythonTerminal = null;
+    currentFilename = null;
     textQueue = [];
     waitsQueue = [];
 }
 
-function sendQueuedText(text, waitTime=50) {
+function sendQueuedText(text, waitTime = 50) {
     textQueue.push(text);
     waitsQueue.push(waitTime);
 }
@@ -35,8 +37,17 @@ function queueLoop() {
     }
 }
 
+function updateFilename(filename) {
+    currentFilename = filename;
+    sendQueuedText(`__file__ = r'${filename}'`)
+    sendQueuedText('import sys')
+    sendQueuedText('import os')
+    sendQueuedText('sys.path.append(os.path.dirname(__file__))')
+}
+
+
 function activate(context) {
-    vscode.window.onDidCloseTerminal(function(event) {
+    vscode.window.onDidCloseTerminal(function (event) {
         if (event._name === pythonTerminalName) {
             removePythonTerminal();
         }
@@ -50,7 +61,10 @@ function activate(context) {
         }
         const editor = vscode.window.activeTextEditor;
         const filename = editor.document.fileName;
-        
+        if (filename !== currentFilename) {
+            updateFilename(filename);
+        }
+
         let startLine, endLine;
         if (editor.selection.isEmpty) {
             startLine = editor.selection.active.line + 1
@@ -60,9 +74,6 @@ function activate(context) {
             endLine = editor.selection.end.line + 1;
         }
 
-        sendQueuedText(`__file__ = r'${filename}'`);
-        sendQueuedText('import sys')
-        sendQueuedText('sys.path.append(os.path.dirname(__file__))')
         const command = `%load -r ${startLine}-${endLine} ${filename}`;
         sendQueuedText(command);
         sendQueuedText('\n\n');
@@ -76,9 +87,10 @@ function activate(context) {
 
         const editor = vscode.window.activeTextEditor;
         const filename = editor.document.fileName;
-        sendQueuedText(`__file__ = r'${filename}'`);
-        sendQueuedText('import sys')
-        sendQueuedText('sys.path.append(os.path.dirname(__file__))')
+        if (filename !== currentFilename) {
+            updateFilename(filename);
+        }
+
         sendQueuedText(`%load ${filename}`, 100);
         sendQueuedText('\n\n');
         pythonTerminal.show();
